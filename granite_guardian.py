@@ -14,8 +14,9 @@ Run just the curated demo subset (for live presentation):
 import requests
 import json
 import sys
+import os
 
-MODEL = "granite4.1:8b"  # latest model 
+MODEL = "granite3.2:8b"  # change to match whatever tag you pulled
 
 
 class GuardianConnectionError(Exception):
@@ -110,6 +111,142 @@ def warm_up_model():
     except GuardianConnectionError as e:
         print("Warm-up failed: " + str(e))
         return False
+
+
+# ============================================================================
+# FILE CONTENT EXTRACTION
+# ----------------------------------------------------------------------------
+# Turns a real generated file (pptx, docx, pdf, xlsx, image, etc.) into either
+# text Guardian can judge with the normal 9 checks, or - for images - basic
+# integrity metadata. Each extractor imports its library lazily, so a missing
+# library only breaks that one format, not the whole module.
+#
+# NOTE ON IMAGES: this validates that an image file is real and not corrupt
+# (opens correctly, has valid dimensions) - it does NOT judge whether the
+# image actually looks right or matches the creative brief. That needs a
+# vision-capable model (a separate, bigger addition - Ollama would need a
+# vision model pulled, e.g. granite3.2-vision, and a different API call
+# shape). Flagged clearly in the result rather than silently skipped.
+# ============================================================================
+
+TEXT_EXTRACTABLE_FORMATS = {".pptx", ".docx", ".pdf", ".xlsx", ".xls", ".txt", ".csv", ".md"}
+IMAGE_FORMATS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
+
+
+def _extract_pptx_text(file_path):
+    from pptx import Presentation
+    prs = Presentation(file_path)
+    slides = []
+    for i, slide in enumerate(prs.slides, 1):
+        lines = []
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                for para in shape.text_frame.paragraphs:
+                    line = "".join(run.text for run in para.runs)
+                    if line.strip():
+                        lines.append(line.strip())
+        slides.append("Slide " + str(i) + ": " + " | ".join(lines))
+    return "\n".join(slides)
+
+
+def _extract_docx_text(file_path):
+    import docx
+    doc = docx.Document(file_path)
+    parts = [p.text for p in doc.paragraphs if p.text.strip()]
+    for table in doc.tables:
+        for row in table.rows:
+            cells = [c.text.strip() for c in row.cells]
+            if any(cells):
+                parts.append(" | ".join(cells))
+    return "\n".join(parts)
+
+
+def _extract_pdf_text(file_path):
+    from pypdf import PdfReader
+    reader = PdfReader(file_path)
+    pages = []
+    for i, page in enumerate(reader.pages, 1):
+        text = (page.extract_text() or "").strip()
+        pages.append("Page " + str(i) + ": " + text)
+    return "\n".join(pages)
+
+
+def _extract_xlsx_text(file_path):
+    from openpyxl import load_workbook
+    wb = load_workbook(file_path, data_only=True)
+    lines = []
+    for sheet in wb.worksheets:
+        lines.append("Sheet: " + sheet.title)
+        for row in sheet.iter_rows(values_only=True):
+            if any(cell is not None for cell in row):
+                lines.append(" | ".join("" if c is None else str(c) for c in row))
+    return "\n".join(lines)
+
+
+def _extract_plain_text(file_path):
+    with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+        return f.read()
+
+
+_TEXT_EXTRACTORS = {
+    ".pptx": _extract_pptx_text,
+    ".docx": _extract_docx_text,
+    ".pdf": _extract_pdf_text,
+    ".xlsx": _extract_xlsx_text,
+    ".xls": _extract_xlsx_text,  # note: openpyxl can't read legacy .xls (pre-2007) - flagged in the error if it fails
+    ".txt": _extract_plain_text,
+    ".csv": _extract_plain_text,
+    ".md": _extract_plain_text,
+}
+
+
+def _validate_image(file_path):
+    from PIL import Image, UnidentifiedImageError
+    try:
+        with Image.open(file_path) as img:
+            img.verify()
+        with Image.open(file_path) as img:  # re-open: verify() leaves the file unusable for further reads
+            return {"format": img.format, "size": img.size, "mode": img.mode}
+    except UnidentifiedImageError:
+        raise ValueError("file is not a valid/readable image")
+
+
+def extract_file_content(file_path):
+    """Given a path to a generated file, figure out how to read it.
+
+    Returns a dict:
+      {"kind": "text", "content": "...", "error": None}          - text-extractable formats
+      {"kind": "image", "content": {...metadata...}, "error": None} - valid image, metadata only
+      {"kind": "unsupported"/"error", "content": None, "error": "..."} - can't process it
+
+    Never raises - always returns something guardian_check_from_orchestrator
+    can act on, even for missing files or missing libraries.
+    """
+    if not os.path.exists(file_path):
+        return {"kind": "error", "content": None, "error": "File not found: " + file_path}
+
+    ext = os.path.splitext(file_path)[1].lower()
+
+    if ext in _TEXT_EXTRACTORS:
+        try:
+            return {"kind": "text", "content": _TEXT_EXTRACTORS[ext](file_path), "error": None}
+        except ImportError as e:
+            return {"kind": "error", "content": None,
+                    "error": "Missing library to read " + ext + " files: " + str(e)}
+        except Exception as e:
+            return {"kind": "error", "content": None,
+                    "error": "Failed to read " + file_path + ": " + str(e)}
+
+    if ext in IMAGE_FORMATS:
+        try:
+            return {"kind": "image", "content": _validate_image(file_path), "error": None}
+        except ImportError as e:
+            return {"kind": "error", "content": None, "error": "Missing library to read images: " + str(e)}
+        except Exception as e:
+            return {"kind": "error", "content": None, "error": "Failed to open image " + file_path + ": " + str(e)}
+
+    return {"kind": "unsupported", "content": None,
+            "error": "No extractor available yet for file type '" + ext + "'"}
 
 
 GUARDIAN_PROMPT_TEMPLATE = """You are a strict quality reviewer for an AI system. Evaluate the AI OUTPUT against the USER REQUEST, UPLOADED FILES, and SOURCE TEXT using the checks below. Judge each check ONLY on its own specific criterion - do not let an issue in one check affect another check's verdict.
@@ -273,12 +410,26 @@ def guardian_check_from_orchestrator(orchestrator_output, uploaded_files=None, s
         "selected_model": "granite4.1:8b",
         "task_style": "creative",
         "temperature_used": 0.8,
-        "generated_output": "..."
+        "generated_output": {
+            "type": "text" or "file",
+            "files": ["deck.pptx"],   # populated when actual files were produced
+            "text": "..."            # populated when there's text content/summary
+        }
     }
 
     uploaded_files and source_text come from whoever collects the user's
     input / Task 2 - pass them in here if available. Missing either one is
     fine: completeness and factual_accuracy just have less to check against.
+
+    generated_output["text"] (when present) is used as a fallback. But when
+    generated_output["files"] has real files, Guardian now extracts and
+    judges their ACTUAL content instead (pptx/docx/pdf/xlsx/txt/csv/md) -
+    that's the real deliverable, so it takes priority over any summary text.
+    Images are validated structurally (opens correctly, not corrupt) but
+    their visual content is NOT judged - that needs a vision model, which
+    isn't wired in yet. Formats without an extractor yet are flagged as
+    "unvalidated" rather than silently failed, since that's a gap in this
+    tool, not necessarily a problem with the output itself.
 
     Returns a single JSON-ready dict for Task 3 to consume directly:
     {
@@ -303,15 +454,94 @@ def guardian_check_from_orchestrator(orchestrator_output, uploaded_files=None, s
 
     user_prompt = orchestrator_output["optimized_prompt"]
     temperature_used = orchestrator_output.get("temperature_used")
+    task_style = orchestrator_output.get("task_style")
+    generated = orchestrator_output["generated_output"]
 
-    result = guardian_check(
-        user_prompt=user_prompt,
-        uploaded_files=uploaded_files or [],
-        ai_output=orchestrator_output["generated_output"],
-        source_text=source_text,
-        task_style=orchestrator_output.get("task_style"),
-        temperature_used=temperature_used,
-    )
+    # generated_output can be the old plain-string shape, or the new
+    # {"type", "files", "text"} object - handle both so this doesn't break
+    # again if the shape shifts slightly.
+    if isinstance(generated, dict):
+        output_type = generated.get("type", "text")
+        output_text = generated.get("text") or ""
+        output_files = generated.get("files") or []
+    else:
+        output_type = "text"
+        output_text = generated or ""
+        output_files = []
+
+    # --- Read and validate real files, if any were produced -------------
+    file_reports = []
+    extracted_texts = []
+    broken_files = []
+    unsupported_formats = []
+    image_reports = []
+
+    if output_type == "file" and output_files:
+        for path in output_files:
+            extraction = extract_file_content(path)
+            file_reports.append({"file": path, "kind": extraction["kind"], "error": extraction["error"]})
+
+            if extraction["kind"] == "text":
+                extracted_texts.append("--- " + os.path.basename(path) + " ---\n" + extraction["content"])
+            elif extraction["kind"] == "image":
+                image_reports.append(path)
+            elif extraction["kind"] == "unsupported":
+                unsupported_formats.append(path)
+            elif extraction["kind"] == "error":
+                broken_files.append(path + " (" + str(extraction["error"]) + ")")
+
+    # Real extracted file content is the ground truth of what the user
+    # actually receives, so it takes priority over any summary text.
+    content_to_judge = "\n\n".join(extracted_texts) if extracted_texts else output_text
+
+    if content_to_judge.strip():
+        result = guardian_check(
+            user_prompt=user_prompt,
+            uploaded_files=uploaded_files or [],
+            ai_output=content_to_judge,
+            source_text=source_text,
+            task_style=task_style,
+            temperature_used=temperature_used,
+        )
+    else:
+        # Nothing textual to hand the LLM checks - skip them gracefully
+        # rather than judging an empty string.
+        result = {"pass": True, "failed_checks": [], "feedback": "", "details": {}, "creativity": None}
+
+    # --- Fast, non-LLM checks about file delivery itself -----------------
+    if output_type == "file":
+        if not output_files:
+            result["pass"] = False
+            result["failed_checks"] = result["failed_checks"] + ["output_delivered"]
+            result["feedback"] = (
+                result["feedback"]
+                + " Output type was 'file' but no files were actually produced - regenerate and ensure a file is attached."
+            ).strip()
+        else:
+            result["file_reports"] = file_reports
+
+            if broken_files:
+                result["pass"] = False
+                result["failed_checks"] = result["failed_checks"] + ["file_unreadable"]
+                result["feedback"] = (
+                    result["feedback"] + " Could not read: " + "; ".join(broken_files)
+                ).strip()
+
+            if unsupported_formats:
+                # A gap in this tool, not necessarily a bad output - don't
+                # fail for it, but make it visible rather than silent.
+                result["unvalidated_files"] = unsupported_formats
+                result["feedback"] = (
+                    result["feedback"]
+                    + " Note: no content validator yet for: " + ", ".join(unsupported_formats)
+                    + " (not held against pass/fail)."
+                ).strip()
+
+            if image_reports:
+                result["image_note"] = (
+                    str(len(image_reports)) + " image(s) confirmed valid and readable. Visual content itself "
+                    "(does it match the brief) is not judged - that needs a vision model, not yet wired in."
+                )
 
     retry_prompt, retry_temperature = build_retry_payload(user_prompt, temperature_used, result)
     result["retry_prompt"] = retry_prompt
@@ -539,3 +769,24 @@ if __name__ == "__main__":
         ),
     )
     print(json.dumps(demo_result, indent=2))
+
+    if not demo_mode:
+        print("\n\n=== ORCHESTRATOR ADAPTER: exact shape from her screenshot ===")
+        her_example_output = {
+            "optimized_prompt": "Summarize the provided document, focusing on how AI is used across industries.",
+            "selected_model": "granite3.1-moe:3b",
+            "task_style": "creative",
+            "temperature_used": 0.9,
+            "generated_output": {
+                "type": "file",
+                "files": [],  # empty, exactly as in her screenshot
+                "text": "- Healthcare Sector:\n  - AI enhances diagnostics through faster image analysis.",
+            },
+        }
+        print(json.dumps(guardian_check_from_orchestrator(her_example_output), indent=2))
+
+        print("\n\n=== ORCHESTRATOR ADAPTER: file type WITH a file actually attached ===")
+        her_example_output_fixed = dict(her_example_output)
+        her_example_output_fixed["generated_output"] = dict(her_example_output["generated_output"])
+        her_example_output_fixed["generated_output"]["files"] = ["ai_industries_summary.pptx"]
+        print(json.dumps(guardian_check_from_orchestrator(her_example_output_fixed), indent=2))
