@@ -15,7 +15,7 @@ import requests
 import json
 import sys
 
-MODEL = "granite3.2:8b"  # change to match whatever tag you pulled
+MODEL = "granite4.1:8b"  # latest model 
 
 
 class GuardianConnectionError(Exception):

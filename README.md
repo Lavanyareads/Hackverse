@@ -12,7 +12,7 @@ code can regenerate once and re-check.
 1. Install [Ollama](https://ollama.com)
 2. Pull the model:
    ```bash
-   ollama pull granite3.2:8b
+   ollama pull granite4.1:8b
    ```
 3. Install Python dependencies:
    ```bash
