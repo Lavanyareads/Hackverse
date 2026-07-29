@@ -3,16 +3,18 @@
 Checks generated output against the original request before it reaches the
 user: right slide/word counts, all requested topics covered, every uploaded
 file actually used, correct format, fluent/coherent/relevant writing, no
-fabricated numbers, and (if given) an appropriate generation temperature.
+fabricated numbers, an appropriate generation temperature, and - for real
+generated files (pptx/docx/pdf/xlsx/images) - the actual file content.
 If something fails, it returns a ready-to-use retry prompt so the calling
 code can regenerate once and re-check.
 
 ## Setup (required on whichever laptop runs the full pipeline)
 
 1. Install [Ollama](https://ollama.com)
-2. Pull the model:
+2. Pull the models:
    ```bash
    ollama pull granite4.1:8b
+   ollama pull granite3.2-vision   # optional - only needed to judge generated images
    ```
 3. Install Python dependencies:
    ```bash
@@ -22,7 +24,8 @@ code can regenerate once and re-check.
 **This has to be done on whichever machine actually runs the integrated
 pipeline** - Guardian talks to Ollama on `localhost`, so if it can't find
 Ollama + the model locally, it fails gracefully (returns a clear error, not
-a crash) but won't actually validate anything.
+a crash) but won't actually validate anything. The vision model is optional:
+if it's not pulled, image checks are skipped gracefully rather than failing.
 
 ## Quick check everything's working
 
@@ -50,6 +53,13 @@ if not result["pass"]:
     #   result["retry_temperature"]
     # then call guardian_check_from_orchestrator(...) once more with the new output
 ```
+
+`orchestrator_output["generated_output"]` can be either a plain string, or
+`{"type": "text"/"file", "files": [...], "text": "..."}`. When real files are
+listed, Guardian reads their actual content (pptx/docx/pdf/xlsx/txt/csv/md)
+and judges that instead of any summary text. Images are checked for
+relevance to the prompt and basic quality via the vision model, if it's
+available.
 
 See `test_pipeline.py` for a full worked example chaining all 4 stages
 together, with placeholders marked for each teammate's real function.
