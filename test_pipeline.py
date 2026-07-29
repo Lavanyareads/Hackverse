@@ -44,9 +44,11 @@ def main():
         "selected_model": "granite4.1:8b",
         "task_style": "balanced",
         "temperature_used": 0.5,
-        "generated_output": (
-            "Slide 1: Revenue. Slide 2: Expenses. Slide 3: Profit."
-        ),  # placeholder standing in for the real generated output
+        "generated_output": {
+            "type": "text",
+            "files": [],
+            "text": "Slide 1: Revenue. Slide 2: Expenses. Slide 3: Profit.",
+        },  # placeholder standing in for the real generated output
     }
     print("\nStep 3 (Orchestrator) - selected_model:", orchestrator_output["selected_model"])
 

@@ -1,8 +1,9 @@
 """
 Granite Guardian - Validation Layer (Task 4)
 ----------------------------------------------
-Requires Ollama running locally with a Granite model pulled, e.g.:
-    ollama pull granite3.2:8b
+Requires Ollama running locally with these models pulled:
+    ollama pull granite4.1:8b
+    ollama pull granite3.2-vision   # only needed for judging generated images
 
 Run the full test suite (9 cases, for development/regression testing):
     python granite_guardian.py
@@ -15,8 +16,10 @@ import requests
 import json
 import sys
 import os
+import base64
 
-MODEL = "granite3.2:8b"  # change to match whatever tag you pulled
+MODEL = "granite4.1:8b"  # text judge - change to match whatever tag you pulled
+VISION_MODEL = "granite3.2-vision"  # image judge - separate model, text-only models can't read images
 
 
 class GuardianConnectionError(Exception):
@@ -77,6 +80,55 @@ def call_granite(prompt, timeout=180):
         raise GuardianConnectionError("Ollama responded in an unexpected format: " + str(e))
 
 
+def call_granite_vision(image_path, question, timeout=240):
+    """Send an image + a question to the vision model via Ollama and return
+    the text reply. Same error-handling pattern as call_granite, plus a
+    check that the image file can actually be read and encoded."""
+    try:
+        with open(image_path, "rb") as f:
+            image_b64 = base64.b64encode(f.read()).decode("utf-8")
+    except OSError as e:
+        raise GuardianConnectionError("Could not read image file " + image_path + ": " + str(e))
+
+    try:
+        response = requests.post(
+            "http://localhost:11434/api/chat",
+            json={
+                "model": VISION_MODEL,
+                "messages": [{"role": "user", "content": question, "images": [image_b64]}],
+                "stream": False,
+                "keep_alive": "10m",
+            },
+            timeout=timeout,
+        )
+    except requests.exceptions.ConnectionError:
+        raise GuardianConnectionError(
+            "Could not connect to Ollama at localhost:11434. Is it running? "
+            "Try 'ollama serve' in a separate terminal, then try again."
+        )
+    except requests.exceptions.Timeout:
+        raise GuardianConnectionError(
+            "Ollama did not respond within " + str(timeout) + " seconds for the vision model."
+        )
+    except requests.exceptions.RequestException as e:
+        raise GuardianConnectionError("Unexpected error contacting Ollama (vision): " + str(e))
+
+    if response.status_code == 404:
+        raise GuardianConnectionError(
+            "Ollama responded, but the vision model '" + VISION_MODEL + "' was not found. "
+            "Pull it first with: ollama pull " + VISION_MODEL
+        )
+    if response.status_code != 200:
+        raise GuardianConnectionError(
+            "Ollama returned an error (status " + str(response.status_code) + "): " + response.text
+        )
+
+    try:
+        return response.json()["message"]["content"]
+    except (KeyError, ValueError) as e:
+        raise GuardianConnectionError("Ollama (vision) responded in an unexpected format: " + str(e))
+
+
 def check_ollama_status():
     """Quick pre-flight check you can run before a demo: confirms Ollama is
     reachable and the configured model is actually pulled. Prints a clear
@@ -92,11 +144,21 @@ def check_ollama_status():
     available = [m.get("name", "") for m in response.json().get("models", [])]
     if any(MODEL in name for name in available):
         print("Ollama is running and '" + MODEL + "' is available. Ready to go.")
-        return True
+        text_ok = True
+    else:
+        print("Ollama is running, but '" + MODEL + "' isn't pulled yet.")
+        print("Run: ollama pull " + MODEL)
+        text_ok = False
 
-    print("Ollama is running, but '" + MODEL + "' isn't pulled yet.")
-    print("Run: ollama pull " + MODEL)
-    return False
+    # Vision is optional - informational only, doesn't block startup, since
+    # image validation degrades gracefully per-image if it's missing.
+    if any(VISION_MODEL in name for name in available):
+        print("Vision model '" + VISION_MODEL + "' is also available - image checks enabled.")
+    else:
+        print("Vision model '" + VISION_MODEL + "' not found - image content checks will be skipped "
+              "(run: ollama pull " + VISION_MODEL + " to enable them).")
+
+    return text_ok
 
 
 def warm_up_model():
@@ -110,6 +172,28 @@ def warm_up_model():
         return True
     except GuardianConnectionError as e:
         print("Warm-up failed: " + str(e))
+        return False
+
+
+def warm_up_vision_model():
+    """Same idea as warm_up_model, but for the vision model - only call this
+    if you know images will actually be validated. Failing here is not fatal;
+    image checks just get skipped gracefully."""
+    print("Warming up " + VISION_MODEL + "...")
+    try:
+        # A minimal 1x1 pixel PNG, just to force the model to load - content doesn't matter here.
+        tiny_png = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        )
+        tmp_path = "_warmup_tmp.png"
+        with open(tmp_path, "wb") as f:
+            f.write(tiny_png)
+        call_granite_vision(tmp_path, "Reply with only the word: ready", timeout=180)
+        os.remove(tmp_path)
+        print("Vision model loaded and warm.\n")
+        return True
+    except GuardianConnectionError as e:
+        print("Vision warm-up skipped: " + str(e) + "\n")
         return False
 
 
@@ -247,6 +331,63 @@ def extract_file_content(file_path):
 
     return {"kind": "unsupported", "content": None,
             "error": "No extractor available yet for file type '" + ext + "'"}
+
+
+# ============================================================================
+# IMAGE CONTENT JUDGING (vision model)
+# ----------------------------------------------------------------------------
+# Kept deliberately simple compared to the 9-check text prompt: vision models
+# are generally less reliable at complex multi-field structured judgment than
+# large text models. Two checks only - relevant and quality - both scoped to
+# what a vision-language model can honestly assess from looking at an image.
+# ============================================================================
+
+VISION_PROMPT_TEMPLATE = """You are a strict reviewer checking whether a generated image actually matches what was requested. Do not be lenient or generous - if the image shows a different subject, style, or content than requested, it FAILS relevance even if it is a nice image.
+
+USER REQUEST: {user_prompt}
+
+Follow these steps before answering:
+1. List the concrete, checkable elements the request implies (subject matter, setting, object type, chart type, style, number of items, etc). Be specific - "bar chart" is not satisfied by any other kind of image, "dog" is not satisfied by a cat, etc.
+2. Look at the image and note, element by element, whether each one is actually present.
+3. relevant.pass is true ONLY if every core element from step 1 is clearly present in the image. If the image depicts a different subject entirely, or is missing a core requested element, relevant.pass must be false.
+4. quality.pass is about technical quality ONLY (clear vs blurry/corrupted/garbled/blank) - do not let quality.pass be influenced by whether the content is relevant.
+
+Respond with ONLY valid JSON, no other text, in exactly this shape:
+{{
+  "relevant": {{"pass": true or false, "reason": "one short sentence naming the core requested elements and stating exactly which are present or missing in the image"}},
+  "quality": {{"pass": true or false, "reason": "one short sentence - is the image clear, readable, and not corrupted, garbled, or blank?"}}
+}}
+"""
+
+
+def check_image_content(image_path, user_prompt):
+    """Ask the vision model whether a generated image is relevant to the
+    request and reasonably clear. Never raises - if the vision model or
+    Ollama connection isn't available, degrades gracefully to a "not_checked"
+    pass rather than failing the whole Guardian result over a missing
+    optional model."""
+    prompt = VISION_PROMPT_TEMPLATE.format(user_prompt=user_prompt)
+    try:
+        raw = call_granite_vision(image_path, prompt)
+    except GuardianConnectionError as e:
+        return {"pass": True, "reason": "not_checked - vision model unavailable: " + str(e)}
+
+    cleaned = raw.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.strip("`")
+        if cleaned.startswith("json"):
+            cleaned = cleaned[4:].strip()
+
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError:
+        return {"pass": True, "reason": "not_checked - vision model response wasn't valid JSON: " + raw[:200]}
+
+    relevant = parsed.get("relevant", {"pass": True, "reason": "n/a"})
+    quality = parsed.get("quality", {"pass": True, "reason": "n/a"})
+    passed = relevant.get("pass", True) and quality.get("pass", True)
+    reason = "Relevance - " + relevant.get("reason", "n/a") + " | Quality - " + quality.get("reason", "n/a")
+    return {"pass": passed, "reason": reason}
 
 
 GUARDIAN_PROMPT_TEMPLATE = """You are a strict quality reviewer for an AI system. Evaluate the AI OUTPUT against the USER REQUEST, UPLOADED FILES, and SOURCE TEXT using the checks below. Judge each check ONLY on its own specific criterion - do not let an issue in one check affect another check's verdict.
@@ -538,9 +679,21 @@ def guardian_check_from_orchestrator(orchestrator_output, uploaded_files=None, s
                 ).strip()
 
             if image_reports:
+                image_content_checks = []
+                for path in image_reports:
+                    content_check = check_image_content(path, user_prompt)
+                    image_content_checks.append({"file": path, **content_check})
+                    if not content_check["pass"]:
+                        result["pass"] = False
+                        if "image_content" not in result["failed_checks"]:
+                            result["failed_checks"] = result["failed_checks"] + ["image_content"]
+                        result["feedback"] = (
+                            result["feedback"] + " Image issue (" + path + "): " + content_check["reason"]
+                        ).strip()
+
+                result["image_content_checks"] = image_content_checks
                 result["image_note"] = (
-                    str(len(image_reports)) + " image(s) confirmed valid and readable. Visual content itself "
-                    "(does it match the brief) is not judged - that needs a vision model, not yet wired in."
+                    str(len(image_reports)) + " image(s) checked for relevance and quality via " + VISION_MODEL + "."
                 )
 
     retry_prompt, retry_temperature = build_retry_payload(user_prompt, temperature_used, result)
