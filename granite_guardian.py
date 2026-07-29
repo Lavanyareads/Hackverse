@@ -342,21 +342,42 @@ def extract_file_content(file_path):
 # what a vision-language model can honestly assess from looking at an image.
 # ============================================================================
 
-VISION_PROMPT_TEMPLATE = """You are a strict reviewer checking whether a generated image actually matches what was requested. Do not be lenient or generous - if the image shows a different subject, style, or content than requested, it FAILS relevance even if it is a nice image.
+# Two-stage design, on purpose. A single combined "does this image match this
+# request?" prompt lets granite3.2-vision anchor on the request text and
+# describe things that aren't actually there (observed in testing: it
+# reported "a dog running on a beach" for a photo of a baby, simply because
+# that's what the prompt asked about). Splitting captioning from judgment
+# removes that anchor: the vision model never sees the request while
+# describing the image, and the judgment step never sees the raw pixels, so
+# neither step can contaminate the other.
+
+CAPTION_PROMPT = (
+    "Describe exactly what you literally see in this image in 3-4 sentences: "
+    "subjects, objects, setting, colors, any visible text. Do not guess, "
+    "assume, or reference any external context. Only describe what is "
+    "physically visible in the pixels."
+)
+
+VISION_QUALITY_PROMPT = (
+    "Look at this image purely for technical quality - ignore subject matter "
+    "entirely. Respond with ONLY valid JSON, no other text, in exactly this shape:\n"
+    '{"pass": true or false, "reason": "one short sentence - is the image clear, '
+    'readable, and not corrupted, garbled, or blank?"}'
+)
+
+VISION_RELEVANCE_JUDGE_TEMPLATE = """You are a strict reviewer. You have NOT seen the image yourself - you are working only from an independent, literal description of it written by someone else who looked at it directly. Judge relevance based ONLY on that description, not on what the request implies should be there.
 
 USER REQUEST: {user_prompt}
 
-Follow these steps before answering:
-1. List the concrete, checkable elements the request implies (subject matter, setting, object type, chart type, style, number of items, etc). Be specific - "bar chart" is not satisfied by any other kind of image, "dog" is not satisfied by a cat, etc.
-2. Look at the image and note, element by element, whether each one is actually present.
-3. relevant.pass is true ONLY if every core element from step 1 is clearly present in the image. If the image depicts a different subject entirely, or is missing a core requested element, relevant.pass must be false.
-4. quality.pass is about technical quality ONLY (clear vs blurry/corrupted/garbled/blank) - do not let quality.pass be influenced by whether the content is relevant.
+INDEPENDENT IMAGE DESCRIPTION (written without knowledge of the request above): {image_description}
+
+Steps:
+1. List the concrete, checkable elements the request implies (subject matter, setting, object type, chart type, style, number of items, etc).
+2. Compare each element against the DESCRIPTION only. Do not assume an element is present just because the request mentions it - it must actually appear in the description.
+3. pass is true ONLY if every core element from step 1 is clearly present in the description. If the description depicts a different subject entirely, or is missing a core requested element, pass must be false.
 
 Respond with ONLY valid JSON, no other text, in exactly this shape:
-{{
-  "relevant": {{"pass": true or false, "reason": "one short sentence naming the core requested elements and stating exactly which are present or missing in the image"}},
-  "quality": {{"pass": true or false, "reason": "one short sentence - is the image clear, readable, and not corrupted, garbled, or blank?"}}
-}}
+{{"pass": true or false, "reason": "one short sentence naming the core requested elements and stating exactly which are present or missing per the description"}}
 """
 
 
@@ -365,28 +386,56 @@ def check_image_content(image_path, user_prompt):
     request and reasonably clear. Never raises - if the vision model or
     Ollama connection isn't available, degrades gracefully to a "not_checked"
     pass rather than failing the whole Guardian result over a missing
-    optional model."""
-    prompt = VISION_PROMPT_TEMPLATE.format(user_prompt=user_prompt)
+    optional model.
+
+    Runs as three separate calls on purpose (see comment above
+    CAPTION_PROMPT): a blind caption of the image, a quality check of the
+    image, and a text-only relevance judgment comparing the caption to the
+    request. This prevents the vision model from anchoring on the request
+    text while it's supposed to be observing the image.
+    """
+    def _parse_json(raw):
+        cleaned = raw.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.strip("`")
+            if cleaned.startswith("json"):
+                cleaned = cleaned[4:].strip()
+        return json.loads(cleaned)
+
+    # Step 1: blind caption - no mention of user_prompt anywhere in this call.
     try:
-        raw = call_granite_vision(image_path, prompt)
+        caption = call_granite_vision(image_path, CAPTION_PROMPT).strip()
     except GuardianConnectionError as e:
         return {"pass": True, "reason": "not_checked - vision model unavailable: " + str(e)}
 
-    cleaned = raw.strip()
-    if cleaned.startswith("```"):
-        cleaned = cleaned.strip("`")
-        if cleaned.startswith("json"):
-            cleaned = cleaned[4:].strip()
-
+    # Step 2: quality check - also blind to user_prompt, judged on its own.
     try:
-        parsed = json.loads(cleaned)
+        quality_raw = call_granite_vision(image_path, VISION_QUALITY_PROMPT)
+        quality = _parse_json(quality_raw)
+    except GuardianConnectionError as e:
+        quality = {"pass": True, "reason": "not_checked - vision model unavailable: " + str(e)}
     except json.JSONDecodeError:
-        return {"pass": True, "reason": "not_checked - vision model response wasn't valid JSON: " + raw[:200]}
+        quality = {"pass": True, "reason": "not_checked - vision model quality response wasn't valid JSON"}
 
-    relevant = parsed.get("relevant", {"pass": True, "reason": "n/a"})
-    quality = parsed.get("quality", {"pass": True, "reason": "n/a"})
+    # Step 3: relevance judgment - text-only model, sees the caption and the
+    # request together for the first time, never sees the raw image.
+    judge_prompt = VISION_RELEVANCE_JUDGE_TEMPLATE.format(
+        user_prompt=user_prompt, image_description=caption
+    )
+    try:
+        relevant_raw = call_granite(judge_prompt)
+        relevant = _parse_json(relevant_raw)
+    except GuardianConnectionError as e:
+        return {"pass": True, "reason": "not_checked - text model unavailable for relevance judgment: " + str(e)}
+    except json.JSONDecodeError:
+        return {"pass": True, "reason": "not_checked - relevance judgment response wasn't valid JSON: " + relevant_raw[:200]}
+
     passed = relevant.get("pass", True) and quality.get("pass", True)
-    reason = "Relevance - " + relevant.get("reason", "n/a") + " | Quality - " + quality.get("reason", "n/a")
+    reason = (
+        "Caption - " + caption
+        + " | Relevance - " + relevant.get("reason", "n/a")
+        + " | Quality - " + quality.get("reason", "n/a")
+    )
     return {"pass": passed, "reason": reason}
 
 
