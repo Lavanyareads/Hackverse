@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>App</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="style.css" />
+<script src="auth-guard.js"></script>
+</head>
+<body>
+<div class="bg-nodes"></div>
+
+<div class="card" style="text-align:center;">
+  <div class="brand">
+    <h1 id="welcome">Welcome</h1>
+    <p>This is a placeholder - your main app UI goes here.</p>
+  </div>
+  <button class="submit-btn" id="logout-btn" style="width:100%;">Log Out</button>
+</div>
+
+<script>
+  document.getElementById("welcome").textContent = "Welcome, " + window.currentUser.name;
+  document.getElementById("logout-btn").addEventListener("click", logout);
+</script>
+</body>
+</html>

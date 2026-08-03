@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Sign in</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="style.css" />
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body>
+<div class="bg-nodes"></div>
+
+<div class="card">
+  <!-- Signature element: your actual pipeline, shown as a checkpoint strip -->
+  <div class="pipeline">
+    <span>Prompt</span><span class="line"></span><span class="dot"></span><span class="line"></span>
+    <span>Optimize</span><span class="line"></span><span class="dot"></span><span class="line"></span>
+    <span>Generate</span><span class="line"></span><span class="dot verified"></span><span class="line"></span>
+    <span>Verified</span>
+  </div>
+
+  <div class="brand">
+    <!-- TODO: swap in your actual product name -->
+    <h1>Welcome back</h1>
+    <p>Sign in to continue</p>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" data-tab="signin">Sign In</button>
+    <button class="tab" data-tab="signup">Sign Up</button>
+  </div>
+
+  <!-- Sign In -->
+  <form class="form active" id="signin-form">
+    <label for="signin-email">Email</label>
+    <input type="email" id="signin-email" required autocomplete="email" />
+
+    <label for="signin-password">Password</label>
+    <input type="password" id="signin-password" required autocomplete="current-password" />
+
+    <button type="submit" class="submit-btn">Sign In</button>
+
+    <div class="divider">or</div>
+    <div class="google-btn-container" id="google-btn-signin"></div>
+  </form>
+
+  <!-- Sign Up -->
+  <form class="form" id="signup-form">
+    <div class="step-indicator" id="step-indicator">
+      <span class="step-dot active" data-step="1"></span>
+      <span class="step-line"></span>
+      <span class="step-dot" data-step="2"></span>
+      <span class="step-line"></span>
+      <span class="step-dot" data-step="3"></span>
+    </div>
+
+    <!-- Step 1: Email -->
+    <div class="step active" id="step-1">
+      <label for="signup-email">Email</label>
+      <input type="email" id="signup-email" required autocomplete="email" />
+      <button type="submit" class="submit-btn">Send Verification Code</button>
+
+      <div class="divider">or</div>
+      <div class="google-btn-container" id="google-btn-signup"></div>
+    </div>
+
+    <!-- Step 2: Verify code -->
+    <div class="step" id="step-2">
+      <label>Enter the 6-digit code sent to <strong id="otp-email-display"></strong></label>
+      <div class="otp-inputs" id="otp-inputs">
+        <input type="text" inputmode="numeric" maxlength="1" class="otp-box" />
+        <input type="text" inputmode="numeric" maxlength="1" class="otp-box" />
+        <input type="text" inputmode="numeric" maxlength="1" class="otp-box" />
+        <input type="text" inputmode="numeric" maxlength="1" class="otp-box" />
+        <input type="text" inputmode="numeric" maxlength="1" class="otp-box" />
+        <input type="text" inputmode="numeric" maxlength="1" class="otp-box" />
+      </div>
+      <button type="submit" class="submit-btn">Verify Code</button>
+      <div class="step-links">
+        <button type="button" class="link-btn" id="resend-code-btn">Resend code</button>
+        <button type="button" class="link-btn" id="change-email-btn">Change email</button>
+      </div>
+    </div>
+
+    <!-- Step 3: Set password -->
+    <div class="step" id="step-3">
+      <label for="signup-name">Name</label>
+      <input type="text" id="signup-name" required autocomplete="name" />
+
+      <label for="signup-password">Password</label>
+      <input type="password" id="signup-password" required autocomplete="new-password" minlength="8" />
+
+      <label for="signup-confirm">Confirm password</label>
+      <input type="password" id="signup-confirm" required autocomplete="new-password" minlength="8" />
+
+      <button type="submit" class="submit-btn">Create Account</button>
+    </div>
+  </form>
+
+  <div class="message" id="message"></div>
+</div>
+
+<script src="auth.js"></script>
+</body>
+</html>

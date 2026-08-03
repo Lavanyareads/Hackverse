@@ -1,0 +1,319 @@
+:root {
+  --bg: #14151f;
+  --surface: #1d1e2c;
+  --surface-2: #262838;
+  --border: #33344a;
+  --text: #edeef5;
+  --text-muted: #9a9cb8;
+  --accent: #f2a65a;
+  --accent-soft: rgba(242, 166, 90, 0.15);
+  --accent-2: #7c9eff;
+  --success: #5fd8a0;
+  --error: #ff6b6b;
+  --radius: 14px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Ambient background: faint scattered signal nodes, echoing the pipeline motif without competing with the form */
+.bg-nodes {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    radial-gradient(2px 2px at 12% 20%, var(--border) 50%, transparent 51%),
+    radial-gradient(2px 2px at 85% 15%, var(--border) 50%, transparent 51%),
+    radial-gradient(2px 2px at 70% 80%, var(--border) 50%, transparent 51%),
+    radial-gradient(2px 2px at 20% 75%, var(--border) 50%, transparent 51%),
+    radial-gradient(2px 2px at 45% 40%, var(--border) 50%, transparent 51%),
+    radial-gradient(2px 2px at 90% 60%, var(--border) 50%, transparent 51%);
+  opacity: 0.6;
+}
+
+.card {
+  position: relative;
+  width: 100%;
+  max-width: 400px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 32px 28px 28px;
+}
+
+/* Signature element: the product's actual pipeline, shown as a checkpoint strip */
+.pipeline {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-bottom: 28px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.pipeline .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--border);
+  flex-shrink: 0;
+}
+
+.pipeline .dot.verified {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.pipeline .line {
+  width: 16px;
+  height: 1px;
+  background: var(--border);
+}
+
+.brand {
+  text-align: center;
+  margin-bottom: 24px;
+}
+
+.brand h1 {
+  font-size: 20px;
+  font-weight: 600;
+  margin: 0 0 4px;
+  letter-spacing: -0.01em;
+}
+
+.brand p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.tabs {
+  display: flex;
+  background: var(--surface-2);
+  border-radius: 10px;
+  padding: 3px;
+  margin-bottom: 24px;
+}
+
+.tab {
+  flex: 1;
+  text-align: center;
+  padding: 8px 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-muted);
+  border-radius: 8px;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  transition: background 0.15s, color 0.15s;
+}
+
+.tab.active {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.form {
+  display: none;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.form.active {
+  display: flex;
+}
+
+label {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: -6px;
+}
+
+input {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: var(--text);
+  font-size: 14px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+input:focus-visible {
+  border-color: var(--accent-2);
+}
+
+.submit-btn {
+  margin-top: 4px;
+  background: var(--accent);
+  color: #1a1208;
+  border: none;
+  border-radius: 8px;
+  padding: 11px 0;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: filter 0.15s;
+}
+
+.submit-btn:hover {
+  filter: brightness(1.08);
+}
+
+.submit-btn:focus-visible {
+  outline: 2px solid var(--accent-2);
+  outline-offset: 2px;
+}
+
+.divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 0 14px;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.divider::before,
+.divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.google-btn-container {
+  display: flex;
+  justify-content: center;
+}
+
+.message {
+  margin-top: 14px;
+  font-size: 13px;
+  text-align: center;
+  min-height: 16px;
+}
+
+.message.error {
+  color: var(--error);
+}
+
+.message.success {
+  color: var(--success);
+}
+
+/* Sign-up step wizard */
+.step-indicator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-bottom: 20px;
+}
+
+.step-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--border);
+  transition: background 0.2s;
+}
+
+.step-dot.active {
+  background: var(--accent-2);
+}
+
+.step-dot.done {
+  background: var(--success);
+}
+
+.step-line {
+  width: 28px;
+  height: 1px;
+  background: var(--border);
+}
+
+.step {
+  display: none;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.step.active {
+  display: flex;
+}
+
+.otp-inputs {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin: 6px 0 2px;
+}
+
+.otp-box {
+  width: 42px;
+  height: 48px;
+  text-align: center;
+  font-size: 18px;
+  font-family: "IBM Plex Mono", monospace;
+  padding: 0;
+}
+
+.step-links {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 4px;
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--accent-2);
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+  padding: 0;
+}
+
+.link-btn:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .pipeline .dot.verified {
+    animation: pulse 2.4s ease-in-out infinite;
+  }
+}
+
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 0 0 3px var(--accent-soft); }
+  50% { box-shadow: 0 0 0 6px var(--accent-soft); }
+}
