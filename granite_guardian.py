@@ -33,6 +33,9 @@ OLLAMA_URL = "http://localhost:11434/api/chat"
 OLLAMA_TAGS_URL = "http://localhost:11434/api/tags"
 
 MODEL = "granite4.1:8b"  # text judge - change to match whatever tag you pulled
+GUARDIAN_OUTPUT_PATH = "guardian_output.json"
+GUARDIAN_RETRY_PATH = "guardian_retry.json"
+FINAL_OUTPUT_PATH = "final_output.json"
 
 
 # Cap on how much of a source document we forward into the judge prompt.
@@ -726,29 +729,83 @@ def run_guardian_from_files(generated_result_path, cleaned_input_path):
 # is easy to scan without opening each output file.
 # ============================================================================
 
-def save_guardian_result(result, output_path=None, label="guardian_output"):
-    """Write a Guardian result dict to disk. Defaults to a timestamped
-    filename (e.g. guardian_output_20260804_171523.json) so re-running the
-    script never overwrites a previous run's output. Pass output_path to pin
-    an exact filename instead. Also appends a short summary line to
-    guardian_runs_log.jsonl for a quick history view across all runs."""
-    path = output_path or (label + "_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".json")
+def save_guardian_result(
+    result,
+    generated_result,
+    output_path=None,
+    label="guardian_output"
+):
+    """Save Guardian outputs:
+       - guardian_output.json : full Guardian evaluation
+       - guardian_retry.json  : retry payload for orchestrator
+       - final_output.json    : clean response for frontend
+    """
 
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(result, f, indent=2)
+    output_path = output_path or (label + ".json")
 
+    # -------------------------------------------------
+    # Guardian output (full report)
+    # -------------------------------------------------
+    guardian_output = dict(result)
+
+    guardian_output["files"] = generated_result.get("files", [])
+    guardian_output["text"] = generated_result.get("text", "")
+
+    # Remove retry-only fields
+    guardian_output.pop("retry_prompt", None)
+    guardian_output.pop("retry_temp", None)
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(guardian_output, f, indent=2)
+
+    # -------------------------------------------------
+    # Retry payload
+    # -------------------------------------------------
+    retry_output = {
+        "files": generated_result.get("files", []),
+        "text": generated_result.get("text", ""),
+        "retry_prompt": result.get("retry_prompt"),
+        "retry_temp": result.get("retry_temp"),
+    }
+
+    retry_path = "guardian_retry.json"
+
+    with open(retry_path, "w", encoding="utf-8") as f:
+        json.dump(retry_output, f, indent=2)
+
+    # -------------------------------------------------
+    # Final output (for frontend)
+    # -------------------------------------------------
+    final_output = {
+        "files": generated_result.get("files", []),
+        "text": generated_result.get("text", ""),
+    }
+
+    final_output_path = "final_output.json"
+
+    with open(final_output_path, "w", encoding="utf-8") as f:
+        json.dump(final_output, f, indent=2)
+
+    # -------------------------------------------------
+    # Run log
+    # -------------------------------------------------
     log_entry = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
-        "output_file": path,
+        "guardian_output": output_path,
+        "retry_output": retry_path,
+        "final_output": final_output_path,
         "pass": result.get("pass"),
         "failed_checks": result.get("failed_checks"),
     }
+
     with open(RUN_LOG_PATH, "a", encoding="utf-8") as f:
         f.write(json.dumps(log_entry) + "\n")
 
-    return path
-
-
+    return {
+        "guardian_output": output_path,
+        "retry_output": retry_path,
+        "final_output": final_output_path,
+    }
 # ---- Mock test cases so you can test WITHOUT the rest of the pipeline built yet ----
 
 TEST_CASES = [
