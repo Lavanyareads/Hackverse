@@ -41,7 +41,7 @@ VISION_MODEL = "granite3.2-vision"  # image judge - separate model, text-only mo
 # granite4.1:8b context window can hold, and Ollama will just silently
 # truncate/degrade rather than error, so we truncate deliberately here and
 # say so in the prompt instead of letting that happen invisibly.
-MAX_SOURCE_TEXT_CHARS = 12000
+# MAX_SOURCE_TEXT_CHARS = 12000 $keeping this temporarily to run tests
 
 # Task 1 (the frontend/upload collector) doesn't have its file-tracking wired
 # into cleaned_input.json in a way we trust yet, so for now Guardian does NOT
@@ -310,11 +310,11 @@ _TEXT_EXTRACTORS = {
     ".pdf": _extract_pdf_text,
     ".xlsx": _extract_xlsx_text,
     ".xls": _extract_xlsx_text,  # note: openpyxl can't read legacy .xls (pre-2007) - flagged in the error if it fails
-    ".txt": _extract_plain_text,
+    ".txt": _extract_plain_text, #add html etc etc 
     ".csv": _extract_plain_text,
     ".md": _extract_plain_text,
 }
-
+#image model remove 
 
 def _validate_image(file_path):
     from PIL import Image, UnidentifiedImageError
@@ -777,20 +777,10 @@ def load_json_file(path):
 
 
 def _prepare_source_text(document_text):
-    """Truncate long document_text so it stays within what the local model's
-    context window can actually hold, instead of silently degrading. Adds a
-    visible note when truncation happens so factual_accuracy checks aren't
-    quietly judging against a partial document without anyone knowing."""
+    """Return the complete document text without truncation."""
     if not document_text:
         return None
-    if len(document_text) <= MAX_SOURCE_TEXT_CHARS:
-        return document_text
-    return (
-        document_text[:MAX_SOURCE_TEXT_CHARS]
-        + "\n\n[... truncated for length - source document is "
-        + str(len(document_text)) + " characters total, only the first "
-        + str(MAX_SOURCE_TEXT_CHARS) + " were sent to the judge ...]"
-    )
+    return document_text
 
 
 def build_guardian_inputs_from_cleaned_input(cleaned_input):
