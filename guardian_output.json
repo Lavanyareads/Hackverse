@@ -1,0 +1,56 @@
+{
+  "pass": false,
+  "failed_checks": [
+    "missing_information",
+    "relevance",
+    "output_delivered"
+  ],
+  "feedback": "Include specific sales figures and provide more detailed quantitative analysis for each category to fully satisfy the source requirements. Output type was 'file' but no files were actually produced - regenerate and ensure a file is attached.",
+  "details": {
+    "requirement_match": {
+      "pass": true,
+      "reason": "The output correctly identified and summarized the three categories (Small, Medium, Large) with their respective counts."
+    },
+    "missing_information": {
+      "pass": false,
+      "reason": "Specific sales figures and detailed breakdowns referenced in the source are not included in the report."
+    },
+    "completeness": {
+      "pass": true,
+      "reason": "The output uses all provided data entries to categorize and analyze the sales data."
+    },
+    "formatting": {
+      "pass": true,
+      "reason": "The response follows a structured format with tables, summaries, and visual suggestions as requested."
+    },
+    "fluency": {
+      "score": 5,
+      "pass": true,
+      "reason": "The writing is grammatically correct and flows naturally."
+    },
+    "coherence": {
+      "score": 5,
+      "pass": true,
+      "reason": "The report logically progresses from data extraction to insights without contradictions."
+    },
+    "relevance": {
+      "score": 4,
+      "pass": false,
+      "reason": "While relevant, the report omits specific sales figures and deeper quantitative analysis requested in the source."
+    },
+    "factual_accuracy": {
+      "pass": true,
+      "reason": "The counts for Small (10), Medium (15), and Large (7) categories accurately reflect the extracted data."
+    },
+    "temperature": {
+      "pass": true,
+      "reason": "temperature 0.9 is within the expected creative range (0.7-1.0)"
+    }
+  },
+  "creativity": {
+    "score": 3,
+    "reason": "The report provides a straightforward analysis without overly creative elements, focusing on clear categorization and insight."
+  },
+  "retry_prompt": "Create me a sales report from the document given\n\nThe previous attempt had issues. Please fix the following and regenerate:\nInclude specific sales figures and provide more detailed quantitative analysis for each category to fully satisfy the source requirements. Output type was 'file' but no files were actually produced - regenerate and ensure a file is attached.",
+  "retry_temperature": 0.9
+}
