@@ -204,9 +204,28 @@ def _parse_judge_json(raw):
 # vision model.
 # ============================================================================
 
-TEXT_EXTRACTABLE_FORMATS = {".pptx", ".docx", ".pdf", ".xlsx", ".xls", ".txt", ".csv", ".md"}
-IMAGE_FORMATS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
+TEXT_EXTRACTABLE_FORMATS = {
+    ".pptx",
+    ".docx",
+    ".pdf",
+    ".xlsx",
+    ".xls",
+    ".txt",
+    ".csv",
+    ".md",
+    ".html",
+    ".htm",
+}
 
+
+
+def _extract_html_text(file_path):
+    from bs4 import BeautifulSoup
+
+    with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+        soup = BeautifulSoup(f.read(), "html.parser")
+
+    return soup.get_text(separator="\n", strip=True)
 
 def _extract_pptx_text(file_path):
     from pptx import Presentation
@@ -262,29 +281,34 @@ def _extract_plain_text(file_path):
     with open(file_path, "r", encoding="utf-8", errors="replace") as f:
         return f.read()
 
+def _extract_xls_text(file_path):
+    import xlrd
+
+    workbook = xlrd.open_workbook(file_path)
+    lines = []
+
+    for sheet in workbook.sheets():
+        lines.append("Sheet: " + sheet.name)
+
+        for row_idx in range(sheet.nrows):
+            row = sheet.row_values(row_idx)
+            if any(cell != "" for cell in row):
+                lines.append(" | ".join(str(cell) for cell in row))
+
+    return "\n".join(lines)
 
 _TEXT_EXTRACTORS = {
     ".pptx": _extract_pptx_text,
     ".docx": _extract_docx_text,
     ".pdf": _extract_pdf_text,
     ".xlsx": _extract_xlsx_text,
-    ".xls": _extract_xlsx_text,  # note: openpyxl can't read legacy .xls (pre-2007) - flagged in the error if it fails
-    ".txt": _extract_plain_text, #add html etc etc 
+    ".xls": _extract_xls_text,
+    ".txt": _extract_plain_text,
     ".csv": _extract_plain_text,
     ".md": _extract_plain_text,
+    ".html": _extract_html_text,
+    ".htm": _extract_html_text,
 }
-#image model remove 
-
-def _validate_image(file_path):
-    from PIL import Image, UnidentifiedImageError
-    try:
-        with Image.open(file_path) as img:
-            img.verify()
-        with Image.open(file_path) as img:  # re-open: verify() leaves the file unusable for further reads
-            return {"format": img.format, "size": img.size, "mode": img.mode}
-    except UnidentifiedImageError:
-        raise ValueError("file is not a valid/readable image")
-
 
 def extract_file_content(file_path):
     """Given a path to a generated file, figure out how to read it.
@@ -311,14 +335,6 @@ def extract_file_content(file_path):
         except Exception as e:
             return {"kind": "error", "content": None,
                     "error": "Failed to read " + file_path + ": " + str(e)}
-
-    if ext in IMAGE_FORMATS:
-        try:
-            return {"kind": "image", "content": _validate_image(file_path), "error": None}
-        except ImportError as e:
-            return {"kind": "error", "content": None, "error": "Missing library to read images: " + str(e)}
-        except Exception as e:
-            return {"kind": "error", "content": None, "error": "Failed to open image " + file_path + ": " + str(e)}
 
     return {"kind": "unsupported", "content": None,
             "error": "No extractor available yet for file type '" + ext + "'"}
@@ -621,14 +637,15 @@ def guardian_check_from_orchestrator(orchestrator_output, uploaded_files=None, s
                     + " (not held against pass/fail)."
                 ).strip()
 
-    retry_prompt, retry_temperature = build_retry_payload(user_prompt, temperature_used, result)
-    # generated may be either a dict with 'files'/'text' or a plain string.
-    if isinstance(generated, dict):
-        result["files"] = generated.get("files", [])
-        result["text"] = generated.get("text", "")
-    else:
-        result["files"] = []
-        result["text"] = generated or ""
+    # Build retry information for the orchestrator if validation failed.
+    retry_prompt, retry_temperature = build_retry_payload(
+        user_prompt,
+        temperature_used,
+        result,
+    )
+
+    result["retry_prompt"] = retry_prompt
+    result["retry_temp"] = retry_temperature
 
     return result
 
