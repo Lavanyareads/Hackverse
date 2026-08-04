@@ -3,7 +3,6 @@ Granite Guardian - Validation Layer (Task 4)
 ----------------------------------------------
 Requires Ollama running locally with these models pulled:
     ollama pull granite4.1:8b
-    ollama pull granite3.2-vision   # only needed for judging generated images
 
 Run the full test suite (9 cases, for development/regression testing):
     python granite_guardian.py
@@ -15,17 +14,17 @@ Run against real pipeline output (Payal's generated_result.json + Shalmalee's
 cleaned_input.json):
     python granite_guardian.py --files path/to/generated_result.json path/to/cleaned_input.json
 
-Every run writes a timestamped JSON file (e.g. guardian_output_20260804_171523.json)
-instead of a single guardian_output.json that gets clobbered on the next run, and
-appends a one-line summary to guardian_runs_log.jsonl so you can see run history at
-a glance. Use --output to pick an exact filename if you want to override that.
+Every run writes its own timestamped JSON file (e.g.
+guardian_output_20260805_171523.json) instead of a single file that gets
+overwritten on the next run, and appends a one-line summary to
+guardian_runs_log.jsonl so you can see run history at a glance. Use
+--output to pick an exact filename instead.
 """
 
 import requests
 import json
 import sys
 import os
-import base64
 import argparse
 from datetime import datetime
 
@@ -33,18 +32,16 @@ OLLAMA_URL = "http://localhost:11434/api/chat"
 OLLAMA_TAGS_URL = "http://localhost:11434/api/tags"
 
 MODEL = "granite4.1:8b"  # text judge - change to match whatever tag you pulled
-GUARDIAN_OUTPUT_PATH = "guardian_output.json"
-GUARDIAN_RETRY_PATH = "guardian_retry.json"
-FINAL_OUTPUT_PATH = "final_output.json"
 
+RESULTS_DIR = "."  # where output files + the run log get written
+RUN_LOG_PATH = os.path.join(RESULTS_DIR, "guardian_runs_log.jsonl")
 
-# Cap on how much of a source document we forward into the judge prompt.
 # Shalmalee's cleaned_input.json can carry document_text in the hundreds of
 # thousands of characters (whole PDFs) - that blows past what a local
 # granite4.1:8b context window can hold, and Ollama will just silently
 # truncate/degrade rather than error, so we truncate deliberately here and
 # say so in the prompt instead of letting that happen invisibly.
-# MAX_SOURCE_TEXT_CHARS = 12000 $keeping this temporarily to run tests
+MAX_SOURCE_TEXT_CHARS = 12000
 
 # Task 1 (the frontend/upload collector) doesn't have its file-tracking wired
 # into cleaned_input.json in a way we trust yet, so for now Guardian does NOT
@@ -52,9 +49,6 @@ FINAL_OUTPUT_PATH = "final_output.json"
 # against, which is fine for now. Flip this back to True once that hookup is
 # confirmed and completeness checks should resume automatically.
 INCLUDE_UPLOADED_FILES_FROM_FRONTEND = False
-
-RESULTS_DIR = "."  # where timestamped output files + the run log get written
-RUN_LOG_PATH = os.path.join(RESULTS_DIR, "guardian_runs_log.jsonl")
 
 
 class GuardianConnectionError(Exception):
@@ -64,10 +58,6 @@ class GuardianConnectionError(Exception):
 
 # ============================================================================
 # OLLAMA TRANSPORT
-# ----------------------------------------------------------------------------
-# call_granite and call_granite_vision both used to duplicate the entire
-# request/error-handling block. That logic now lives once in _ollama_chat;
-# the two public functions just build the right message payload and call it.
 # ============================================================================
 
 def _ollama_chat(model, messages, timeout, context=""):
@@ -141,13 +131,11 @@ def check_ollama_status():
     available = [m.get("name", "") for m in response.json().get("models", [])]
     if any(MODEL in name for name in available):
         print("Ollama is running and '" + MODEL + "' is available. Ready to go.")
-        text_ok = True
-    else:
-        print("Ollama is running, but '" + MODEL + "' isn't pulled yet.")
-        print("Run: ollama pull " + MODEL)
-        text_ok = False
+        return True
 
-    return text_ok
+    print("Ollama is running, but '" + MODEL + "' isn't pulled yet.")
+    print("Run: ollama pull " + MODEL)
+    return False
 
 
 def warm_up_model():
@@ -163,16 +151,9 @@ def warm_up_model():
         print("Warm-up failed: " + str(e))
         return False
 
- 
-
 
 # ============================================================================
 # JUDGE-RESPONSE PARSING
-# ----------------------------------------------------------------------------
-# Both the text judge (guardian_check) and the vision judge (check_image_content)
-# ask the model to reply with raw JSON, and both have to defend against Granite
-# occasionally wrapping that JSON in markdown code fences. That parsing lived
-# twice before; it's a single helper now.
 # ============================================================================
 
 def _parse_judge_json(raw):
@@ -193,39 +174,11 @@ def _parse_judge_json(raw):
 # ============================================================================
 # FILE CONTENT EXTRACTION
 # ----------------------------------------------------------------------------
-# Turns a real generated file (pptx, docx, pdf, xlsx, image, etc.) into either
-# text Guardian can judge with the normal 9 checks, or - for images - basic
-# integrity metadata. Each extractor imports its library lazily, so a missing
-# library only breaks that one format, not the whole module.
-#
-# NOTE ON IMAGES: this validates that an image file is real and not corrupt
-# (opens correctly, has valid dimensions) - it does NOT judge whether the
-# image actually looks right; that's check_image_content's job, via the
-# vision model.
+# Turns a real generated file (pptx, docx, pdf, xlsx, html, etc.) into text
+# Guardian can judge with the normal 9 checks. Each extractor imports its
+# library lazily, so a missing library only breaks that one format, not the
+# whole module.
 # ============================================================================
-
-TEXT_EXTRACTABLE_FORMATS = {
-    ".pptx",
-    ".docx",
-    ".pdf",
-    ".xlsx",
-    ".xls",
-    ".txt",
-    ".csv",
-    ".md",
-    ".html",
-    ".htm",
-}
-
-
-
-def _extract_html_text(file_path):
-    from bs4 import BeautifulSoup
-
-    with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-        soup = BeautifulSoup(f.read(), "html.parser")
-
-    return soup.get_text(separator="\n", strip=True)
 
 def _extract_pptx_text(file_path):
     from pptx import Presentation
@@ -277,26 +230,35 @@ def _extract_xlsx_text(file_path):
     return "\n".join(lines)
 
 
-def _extract_plain_text(file_path):
-    with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-        return f.read()
-
 def _extract_xls_text(file_path):
+    # xlrd 2.0+ only reads legacy .xls - .xlsx goes through openpyxl above.
     import xlrd
-
     workbook = xlrd.open_workbook(file_path)
     lines = []
-
     for sheet in workbook.sheets():
         lines.append("Sheet: " + sheet.name)
-
         for row_idx in range(sheet.nrows):
             row = sheet.row_values(row_idx)
             if any(cell != "" for cell in row):
                 lines.append(" | ".join(str(cell) for cell in row))
-
     return "\n".join(lines)
 
+
+def _extract_html_text(file_path):
+    from bs4 import BeautifulSoup
+    with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+        soup = BeautifulSoup(f.read(), "html.parser")
+    return soup.get_text(separator="\n", strip=True)
+
+
+def _extract_plain_text(file_path):
+    with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+        return f.read()
+
+
+# Single source of truth for "what formats can we read" - the set of
+# supported extensions is just this dict's keys, so there's nothing else
+# that can drift out of sync with it.
 _TEXT_EXTRACTORS = {
     ".pptx": _extract_pptx_text,
     ".docx": _extract_docx_text,
@@ -310,12 +272,12 @@ _TEXT_EXTRACTORS = {
     ".htm": _extract_html_text,
 }
 
+
 def extract_file_content(file_path):
     """Given a path to a generated file, figure out how to read it.
 
     Returns a dict:
-      {"kind": "text", "content": "...", "error": None}          - text-extractable formats
-      {"kind": "image", "content": {...metadata...}, "error": None} - valid image, metadata only
+      {"kind": "text", "content": "...", "error": None}              - readable formats
       {"kind": "unsupported"/"error", "content": None, "error": "..."} - can't process it
 
     Never raises - always returns something guardian_check_from_orchestrator
@@ -488,6 +450,26 @@ def guardian_check(user_prompt, uploaded_files, ai_output, source_text=None,
     }
 
 
+def build_retry_payload(user_prompt, temperature_used, guardian_result):
+    """Given a FAILED guardian_result, build the exact retry prompt and
+    temperature to regenerate with. Returns (None, None) if guardian_result
+    already passed - nothing to retry."""
+    if guardian_result["pass"]:
+        return None, None
+
+    retry_temperature = temperature_used
+    temp_check = guardian_result.get("details", {}).get("temperature")
+    if temp_check and not temp_check.get("pass", True) and "suggested_temperature" in temp_check:
+        retry_temperature = temp_check["suggested_temperature"]
+
+    retry_prompt = (
+        user_prompt
+        + "\n\nThe previous attempt had issues. Please fix the following and regenerate:\n"
+        + guardian_result["feedback"]
+    )
+    return retry_prompt, retry_temperature
+
+
 def guardian_check_from_orchestrator(orchestrator_output, uploaded_files=None, source_text=None,
                                       user_prompt_override=None):
     """Adapter for the Orchestrator's actual output shape:
@@ -522,11 +504,9 @@ def guardian_check_from_orchestrator(orchestrator_output, uploaded_files=None, s
     callers are unaffected.
 
     generated_output["text"] (when present) is used as a fallback. But when
-    generated_output["files"] has real files, Guardian now extracts and
-    judges their ACTUAL content instead (pptx/docx/pdf/xlsx/txt/csv/md) -
+    generated_output["files"] has real files, Guardian extracts and judges
+    their ACTUAL content instead (pptx/docx/pdf/xlsx/xls/html/txt/csv/md) -
     that's the real deliverable, so it takes priority over any summary text.
-    Images are validated structurally (opens correctly, not corrupt) and,
-    when the vision model is available, judged for relevance/quality too.
     Formats without an extractor yet are flagged as "unvalidated" rather
     than silently failed, since that's a gap in this tool, not necessarily
     a problem with the output itself.
@@ -574,7 +554,6 @@ def guardian_check_from_orchestrator(orchestrator_output, uploaded_files=None, s
     extracted_texts = []
     broken_files = []
     unsupported_formats = []
-    image_reports = []
 
     if output_type == "file" and output_files:
         for path in output_files:
@@ -583,8 +562,6 @@ def guardian_check_from_orchestrator(orchestrator_output, uploaded_files=None, s
 
             if extraction["kind"] == "text":
                 extracted_texts.append("--- " + os.path.basename(path) + " ---\n" + extraction["content"])
-            elif extraction["kind"] == "image":
-                image_reports.append(path)
             elif extraction["kind"] == "unsupported":
                 unsupported_formats.append(path)
             elif extraction["kind"] == "error":
@@ -637,15 +614,9 @@ def guardian_check_from_orchestrator(orchestrator_output, uploaded_files=None, s
                     + " (not held against pass/fail)."
                 ).strip()
 
-    # Build retry information for the orchestrator if validation failed.
-    retry_prompt, retry_temperature = build_retry_payload(
-        user_prompt,
-        temperature_used,
-        result,
-    )
-
+    retry_prompt, retry_temperature = build_retry_payload(user_prompt, temperature_used, result)
     result["retry_prompt"] = retry_prompt
-    result["retry_temp"] = retry_temperature
+    result["retry_temperature"] = retry_temperature
 
     return result
 
@@ -669,13 +640,12 @@ def guardian_check_from_orchestrator(orchestrator_output, uploaded_files=None, s
 #     }
 #   }
 #
-# load_json_file + run_guardian_from_files below take the two file paths and
-# do the mapping so nobody has to hand-wire the fields every time:
-#   - cleaned_input["document_text"]                -> source_text (truncated, see MAX_SOURCE_TEXT_CHARS)
-#   - cleaned_input["metadata"]["documents"][*]["filename"] -> uploaded_files
-#     (currently OFF - see INCLUDE_UPLOADED_FILES_FROM_FRONTEND at the top of this file)
-#   - cleaned_input["original_prompt"]               -> user_prompt_override
-#     (judge against what the user actually asked, not the rewritten/optimized prompt)
+# build_guardian_inputs_from_cleaned_input + run_guardian_from_files below
+# take the two file paths and do the mapping so nobody has to hand-wire the
+# fields every time:
+#   - cleaned_input["document_text"]                        -> source_text (truncated - see MAX_SOURCE_TEXT_CHARS)
+#   - cleaned_input["metadata"]["documents"][*]["filename"]  -> uploaded_files (currently OFF, see INCLUDE_UPLOADED_FILES_FROM_FRONTEND)
+#   - cleaned_input["original_prompt"]                       -> user_prompt_override (judge against what the user actually asked, not the rewritten prompt)
 # ============================================================================
 
 def load_json_file(path):
@@ -690,10 +660,20 @@ def load_json_file(path):
 
 
 def _prepare_source_text(document_text):
-    """Return the complete document text without truncation."""
+    """Truncate very large extracted documents to a size the local model can
+    actually handle, with a clear marker so the judge knows content was cut
+    (rather than silently degrading, which is what Ollama would otherwise do
+    on its own)."""
     if not document_text:
         return None
-    return document_text
+    if len(document_text) <= MAX_SOURCE_TEXT_CHARS:
+        return document_text
+    return (
+        document_text[:MAX_SOURCE_TEXT_CHARS]
+        + "\n\n[... document truncated for length - "
+        + str(len(document_text) - MAX_SOURCE_TEXT_CHARS)
+        + " more characters not shown ...]"
+    )
 
 
 def build_guardian_inputs_from_cleaned_input(cleaned_input):
@@ -722,107 +702,116 @@ def build_guardian_inputs_from_cleaned_input(cleaned_input):
 def run_guardian_from_files(generated_result_path, cleaned_input_path):
     """End-to-end helper: load Payal's generated_result.json and Shalmalee's
     cleaned_input.json from disk, wire their fields together, and run the
-    full Guardian check. Returns the same dict shape as
-    guardian_check_from_orchestrator."""
+    full Guardian check.
+
+    Returns (result, orchestrator_output) - the guardian_check_from_orchestrator
+    result dict, plus the raw loaded generated_result.json (so the caller can
+    save/echo the original generated content alongside the verdict without
+    reloading the file a second time).
+    """
     orchestrator_output = load_json_file(generated_result_path)
     cleaned_input = load_json_file(cleaned_input_path)
 
     uploaded_files, source_text, original_prompt = build_guardian_inputs_from_cleaned_input(cleaned_input)
 
-    return guardian_check_from_orchestrator(
+    result = guardian_check_from_orchestrator(
         orchestrator_output,
         uploaded_files=uploaded_files,
         source_text=source_text,
         user_prompt_override=original_prompt,
     )
+    return result, orchestrator_output
 
 
 # ============================================================================
 # SAVING RESULTS
 # ----------------------------------------------------------------------------
 # Every run gets its own timestamped file instead of everyone's runs
-# clobbering a single guardian_output.json, plus a running append-only log
+# clobbering a single output file, plus a running append-only log
 # (guardian_runs_log.jsonl) with a one-line summary of every run so history
 # is easy to scan without opening each output file.
 # ============================================================================
 
-def save_guardian_result(
-    result,
-    generated_result,
-    output_path=None,
-    label="guardian_output"
-):
-    """Save Guardian outputs:
-       - guardian_output.json : full Guardian evaluation
-       - guardian_retry.json  : retry payload for orchestrator
-       - final_output.json    : clean response for frontend
+def _timestamped_path(label):
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return os.path.join(RESULTS_DIR, label + "_" + stamp + ".json")
+
+
+def _append_run_log(entry):
+    with open(RUN_LOG_PATH, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry) + "\n")
+
+
+def save_guardian_result(result, orchestrator_output, output_path=None):
+    """Save the result of a real pipeline run (--files mode): the full
+    Guardian verdict, a retry payload for Task 3 if it failed, and a clean
+    "final_output" for the frontend if it passed.
+
+    orchestrator_output is Payal's raw generated_result.json content - used
+    to pull the actual generated files/text for final_output.json (note:
+    those live nested under generated_output, not at the top level).
+
+    Returns the dict of paths written.
     """
+    generated_output = orchestrator_output.get("generated_output", {})
+    if not isinstance(generated_output, dict):
+        generated_output = {}
+    generated_files = generated_output.get("files", [])
+    generated_text = generated_output.get("text", "")
 
-    output_path = output_path or (label + ".json")
+    guardian_output_path = output_path or _timestamped_path("guardian_output")
+    with open(guardian_output_path, "w", encoding="utf-8") as f:
+        json.dump(result, f, indent=2)
 
-    # -------------------------------------------------
-    # Guardian output (full report)
-    # -------------------------------------------------
-    guardian_output = dict(result)
+    written = {"guardian_output": guardian_output_path}
 
-    guardian_output["files"] = generated_result.get("files", [])
-    guardian_output["text"] = generated_result.get("text", "")
+    if not result.get("pass"):
+        retry_path = _timestamped_path("guardian_retry")
+        retry_output = {
+            "retry_prompt": result.get("retry_prompt"),
+            "retry_temperature": result.get("retry_temperature"),
+            "failed_checks": result.get("failed_checks"),
+            "feedback": result.get("feedback"),
+        }
+        with open(retry_path, "w", encoding="utf-8") as f:
+            json.dump(retry_output, f, indent=2)
+        written["retry_output"] = retry_path
+    else:
+        final_path = _timestamped_path("final_output")
+        final_output = {"files": generated_files, "text": generated_text}
+        with open(final_path, "w", encoding="utf-8") as f:
+            json.dump(final_output, f, indent=2)
+        written["final_output"] = final_path
 
-    # Remove retry-only fields
-    guardian_output.pop("retry_prompt", None)
-    guardian_output.pop("retry_temp", None)
-
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(guardian_output, f, indent=2)
-
-    # -------------------------------------------------
-    # Retry payload
-    # -------------------------------------------------
-    retry_output = {
-        "files": generated_result.get("files", []),
-        "text": generated_result.get("text", ""),
-        "retry_prompt": result.get("retry_prompt"),
-        "retry_temp": result.get("retry_temp"),
-    }
-
-    retry_path = "guardian_retry.json"
-
-    with open(retry_path, "w", encoding="utf-8") as f:
-        json.dump(retry_output, f, indent=2)
-
-    # -------------------------------------------------
-    # Final output (for frontend)
-    # -------------------------------------------------
-    final_output = {
-        "files": generated_result.get("files", []),
-        "text": generated_result.get("text", ""),
-    }
-
-    final_output_path = "final_output.json"
-
-    with open(final_output_path, "w", encoding="utf-8") as f:
-        json.dump(final_output, f, indent=2)
-
-    # -------------------------------------------------
-    # Run log
-    # -------------------------------------------------
-    log_entry = {
+    _append_run_log({
         "timestamp": datetime.now().isoformat(timespec="seconds"),
-        "guardian_output": output_path,
-        "retry_output": retry_path,
-        "final_output": final_output_path,
+        "mode": "files",
         "pass": result.get("pass"),
         "failed_checks": result.get("failed_checks"),
-    }
+        **written,
+    })
 
-    with open(RUN_LOG_PATH, "a", encoding="utf-8") as f:
-        f.write(json.dumps(log_entry) + "\n")
+    return written
 
-    return {
-        "guardian_output": output_path,
-        "retry_output": retry_path,
-        "final_output": final_output_path,
-    }
+
+def save_run_results(all_results, output_path=None, label="guardian_run"):
+    """Save results from the mock-test-case / demo run (not the real-files
+    mode - that's save_guardian_result above). Just dumps the whole results
+    dict to a timestamped file plus a run-log line; there's no single
+    "generated file" to extract a final_output from when this is a batch of
+    unrelated test cases."""
+    path = output_path or _timestamped_path(label)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(all_results, f, indent=2)
+
+    _append_run_log({
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "mode": "test_run",
+        "output": path,
+    })
+    return path
+
+
 # ---- Mock test cases so you can test WITHOUT the rest of the pipeline built yet ----
 
 TEST_CASES = [
@@ -942,26 +931,6 @@ DEMO_CASE_NAMES = [
 ]
 
 
-def build_retry_payload(user_prompt, temperature_used, guardian_result):
-    """Given a FAILED guardian_result, build the exact retry prompt and
-    temperature to regenerate with. Returns (None, None) if guardian_result
-    already passed - nothing to retry."""
-    if guardian_result["pass"]:
-        return None, None
-
-    retry_temperature = temperature_used
-    temp_check = guardian_result.get("details", {}).get("temperature")
-    if temp_check and not temp_check.get("pass", True) and "suggested_temperature" in temp_check:
-        retry_temperature = temp_check["suggested_temperature"]
-
-    retry_prompt = (
-        user_prompt
-        + "\n\nThe previous attempt had issues. Please fix the following and regenerate:\n"
-        + guardian_result["feedback"]
-    )
-    return retry_prompt, retry_temperature
-
-
 def run_with_guardian(user_prompt, uploaded_files, generate_fn, source_text=None,
                        task_style=None, temperature_used=None):
     """Orchestrates the full flow: generate -> guardian_check -> if it fails,
@@ -1036,18 +1005,21 @@ def _run_files_mode(generated_result_path, cleaned_input_path, output_path):
     print("generated_result.json: " + generated_result_path)
     print("cleaned_input.json:    " + cleaned_input_path)
     try:
-        result = run_guardian_from_files(generated_result_path, cleaned_input_path)
+        result, orchestrator_output = run_guardian_from_files(generated_result_path, cleaned_input_path)
     except (FileNotFoundError, ValueError) as e:
         print("\nCould not run Guardian: " + str(e))
         raise SystemExit(1)
 
-    saved_path = save_guardian_result(result, output_path)
-    print("\nGuardian result saved to " + saved_path)
+    written = save_guardian_result(result, orchestrator_output, output_path)
+
+    print("\nStatus: " + ("PASS" if result["pass"] else "FAIL " + str(result["failed_checks"])))
+    for kind, path in written.items():
+        print(kind + " -> " + path)
+    print()
     print(json.dumps(result, indent=2))
-    raise SystemExit(0)
 
 
-if __name__ == "__main__":
+def main():
     parser = argparse.ArgumentParser(add_help=True)
     parser.add_argument("--demo", action="store_true", help="Run only the curated demo subset of mock test cases.")
     parser.add_argument(
@@ -1058,7 +1030,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--output", metavar="PATH",
         help="Where to save the JSON result. Defaults to a timestamped filename "
-             "(guardian_output_<timestamp>.json) so previous runs are never overwritten.",
+             "so previous runs are never overwritten.",
     )
     args = parser.parse_args()
 
@@ -1070,9 +1042,9 @@ if __name__ == "__main__":
 
     if args.files:
         _run_files_mode(args.files[0], args.files[1], args.output)
+        return
 
-    demo_mode = args.demo
-    cases_to_run = [c for c in TEST_CASES if c["name"] in DEMO_CASE_NAMES] if demo_mode else TEST_CASES
+    cases_to_run = [c for c in TEST_CASES if c["name"] in DEMO_CASE_NAMES] if args.demo else TEST_CASES
     all_results = {"test_cases": _run_mock_test_cases(cases_to_run)}
 
     print("\n\n=== DEMO: full generate -> guardian -> retry flow ===")
@@ -1088,7 +1060,7 @@ if __name__ == "__main__":
     print(json.dumps(demo_result, indent=2))
     all_results["demo_flow"] = demo_result
 
-    if not demo_mode:
+    if not args.demo:
         print("\n\n=== ORCHESTRATOR ADAPTER: exact shape from her screenshot ===")
         her_example_output = {
             "optimized_prompt": "Summarize the provided document, focusing on how AI is used across industries.",
@@ -1113,8 +1085,9 @@ if __name__ == "__main__":
         print(json.dumps(adapter_with_files_result, indent=2))
         all_results["adapter_with_files"] = adapter_with_files_result
 
-    # One consolidated, timestamped file for this whole run (test cases + demo
-    # flow + adapter examples), on top of the per-run log line - nothing here
-    # overwrites a previous run's file.
-    saved_path = save_guardian_result(all_results, args.output, label="guardian_run")
+    saved_path = save_run_results(all_results, args.output)
     print("\nFull run results saved to " + saved_path)
+
+
+if __name__ == "__main__":
+    main()

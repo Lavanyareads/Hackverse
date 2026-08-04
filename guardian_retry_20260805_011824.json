@@ -1,0 +1,11 @@
+{
+  "retry_prompt": "Create me a sales report from the document given\n\nThe previous attempt had issues. Please fix the following and regenerate:\nCorrect the entry count to 31 and ensure all referenced uploaded files are explicitly used or named. Output type was 'file' but no files were actually produced - regenerate and ensure a file is attached.",
+  "retry_temperature": 0.9,
+  "failed_checks": [
+    "requirement_match",
+    "completeness",
+    "factual_accuracy",
+    "output_delivered"
+  ],
+  "feedback": "Correct the entry count to 31 and ensure all referenced uploaded files are explicitly used or named. Output type was 'file' but no files were actually produced - regenerate and ensure a file is attached."
+}
