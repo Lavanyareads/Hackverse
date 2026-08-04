@@ -619,8 +619,13 @@ def guardian_check_from_orchestrator(orchestrator_output, uploaded_files=None, s
                 ).strip()
 
     retry_prompt, retry_temperature = build_retry_payload(user_prompt, temperature_used, result)
-    result["retry_prompt"] = retry_prompt
-    result["retry_temperature"] = retry_temperature
+    # generated may be either a dict with 'files'/'text' or a plain string.
+    if isinstance(generated, dict):
+        result["files"] = generated.get("files", [])
+        result["text"] = generated.get("text", "")
+    else:
+        result["files"] = []
+        result["text"] = generated or ""
 
     return result
 
