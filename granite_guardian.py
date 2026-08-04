@@ -33,7 +33,7 @@ OLLAMA_URL = "http://localhost:11434/api/chat"
 OLLAMA_TAGS_URL = "http://localhost:11434/api/tags"
 
 MODEL = "granite4.1:8b"  # text judge - change to match whatever tag you pulled
-VISION_MODEL = "granite3.2-vision"  # image judge - separate model, text-only models can't read images
+
 
 # Cap on how much of a source document we forward into the judge prompt.
 # Shalmalee's cleaned_input.json can carry document_text in the hundreds of
@@ -123,20 +123,6 @@ def call_granite(prompt, timeout=600):
     return _ollama_chat(MODEL, [{"role": "user", "content": prompt}], timeout)
 
 
-def call_granite_vision(image_path, question, timeout=240):
-    """Send an image + a question to the vision model via Ollama and return
-    the text reply. Adds a check that the image file can actually be read
-    and encoded before it ever reaches the network call."""
-    try:
-        with open(image_path, "rb") as f:
-            image_b64 = base64.b64encode(f.read()).decode("utf-8")
-    except OSError as e:
-        raise GuardianConnectionError("Could not read image file " + image_path + ": " + str(e))
-
-    messages = [{"role": "user", "content": question, "images": [image_b64]}]
-    return _ollama_chat(VISION_MODEL, messages, timeout, context=" for the vision model")
-
-
 def check_ollama_status():
     """Quick pre-flight check you can run before a demo: confirms Ollama is
     reachable and the configured model is actually pulled. Prints a clear
@@ -158,14 +144,6 @@ def check_ollama_status():
         print("Run: ollama pull " + MODEL)
         text_ok = False
 
-    # Vision is optional - informational only, doesn't block startup, since
-    # image validation degrades gracefully per-image if it's missing.
-    if any(VISION_MODEL in name for name in available):
-        print("Vision model '" + VISION_MODEL + "' is also available - image checks enabled.")
-    else:
-        print("Vision model '" + VISION_MODEL + "' not found - image content checks will be skipped "
-              "(run: ollama pull " + VISION_MODEL + " to enable them).")
-
     return text_ok
 
 
@@ -182,29 +160,7 @@ def warm_up_model():
         print("Warm-up failed: " + str(e))
         return False
 
-
-def warm_up_vision_model():
-    """Same idea as warm_up_model, but for the vision model - only call this
-    if you know images will actually be validated. Failing here is not fatal;
-    image checks just get skipped gracefully."""
-    print("Warming up " + VISION_MODEL + "...")
-    tmp_path = "_warmup_tmp.png"
-    try:
-        # A minimal 1x1 pixel PNG, just to force the model to load - content doesn't matter here.
-        tiny_png = base64.b64decode(
-            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
-        )
-        with open(tmp_path, "wb") as f:
-            f.write(tiny_png)
-        call_granite_vision(tmp_path, "Reply with only the word: ready", timeout=180)
-        print("Vision model loaded and warm.\n")
-        return True
-    except GuardianConnectionError as e:
-        print("Vision warm-up skipped: " + str(e) + "\n")
-        return False
-    finally:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
+ 
 
 
 # ============================================================================
@@ -363,56 +319,6 @@ def extract_file_content(file_path):
 
     return {"kind": "unsupported", "content": None,
             "error": "No extractor available yet for file type '" + ext + "'"}
-
-
-# ============================================================================
-# IMAGE CONTENT JUDGING (vision model)
-# ----------------------------------------------------------------------------
-# Kept deliberately simple compared to the 9-check text prompt: vision models
-# are generally less reliable at complex multi-field structured judgment than
-# large text models. Two checks only - relevant and quality - both scoped to
-# what a vision-language model can honestly assess from looking at an image.
-# ============================================================================
-
-VISION_PROMPT_TEMPLATE = """You are a strict reviewer checking whether a generated image actually matches what was requested. Do not be lenient or generous - if the image shows a different subject, style, or content than requested, it FAILS relevance even if it is a nice image.
-
-USER REQUEST: {user_prompt}
-
-Follow these steps before answering:
-1. List the concrete, checkable elements the request implies (subject matter, setting, object type, chart type, style, number of items, etc). Be specific - "bar chart" is not satisfied by any other kind of image, "dog" is not satisfied by a cat, etc.
-2. Look at the image and note, element by element, whether each one is actually present.
-3. relevant.pass is true ONLY if every core element from step 1 is clearly present in the image. If the image depicts a different subject entirely, or is missing a core requested element, relevant.pass must be false.
-4. quality.pass is about technical quality ONLY (clear vs blurry/corrupted/garbled/blank) - do not let quality.pass be influenced by whether the content is relevant.
-
-Respond with ONLY valid JSON, no other text, in exactly this shape:
-{{
-  "relevant": {{"pass": true or false, "reason": "one short sentence naming the core requested elements and stating exactly which are present or missing in the image"}},
-  "quality": {{"pass": true or false, "reason": "one short sentence - is the image clear, readable, and not corrupted, garbled, or blank?"}}
-}}
-"""
-
-
-def check_image_content(image_path, user_prompt):
-    """Ask the vision model whether a generated image is relevant to the
-    request and reasonably clear. Never raises - if the vision model or
-    Ollama connection isn't available, degrades gracefully to a "not_checked"
-    pass rather than failing the whole Guardian result over a missing
-    optional model."""
-    prompt = VISION_PROMPT_TEMPLATE.format(user_prompt=user_prompt)
-    try:
-        raw = call_granite_vision(image_path, prompt)
-    except GuardianConnectionError as e:
-        return {"pass": True, "reason": "not_checked - vision model unavailable: " + str(e)}
-
-    parsed, raw = _parse_judge_json(raw)
-    if parsed is None:
-        return {"pass": True, "reason": "not_checked - vision model response wasn't valid JSON: " + raw[:200]}
-
-    relevant = parsed.get("relevant", {"pass": True, "reason": "n/a"})
-    quality = parsed.get("quality", {"pass": True, "reason": "n/a"})
-    passed = relevant.get("pass", True) and quality.get("pass", True)
-    reason = "Relevance - " + relevant.get("reason", "n/a") + " | Quality - " + quality.get("reason", "n/a")
-    return {"pass": passed, "reason": reason}
 
 
 GUARDIAN_PROMPT_TEMPLATE = """You are a strict quality reviewer for an AI system. Evaluate the AI OUTPUT against the USER REQUEST, UPLOADED FILES, and SOURCE TEXT using the checks below. Judge each check ONLY on its own specific criterion - do not let an issue in one check affect another check's verdict.
@@ -711,24 +617,6 @@ def guardian_check_from_orchestrator(orchestrator_output, uploaded_files=None, s
                     + " Note: no content validator yet for: " + ", ".join(unsupported_formats)
                     + " (not held against pass/fail)."
                 ).strip()
-
-            if image_reports:
-                image_content_checks = []
-                for path in image_reports:
-                    content_check = check_image_content(path, user_prompt)
-                    image_content_checks.append({"file": path, **content_check})
-                    if not content_check["pass"]:
-                        result["pass"] = False
-                        if "image_content" not in result["failed_checks"]:
-                            result["failed_checks"] = result["failed_checks"] + ["image_content"]
-                        result["feedback"] = (
-                            result["feedback"] + " Image issue (" + path + "): " + content_check["reason"]
-                        ).strip()
-
-                result["image_content_checks"] = image_content_checks
-                result["image_note"] = (
-                    str(len(image_reports)) + " image(s) checked for relevance and quality via " + VISION_MODEL + "."
-                )
 
     retry_prompt, retry_temperature = build_retry_payload(user_prompt, temperature_used, result)
     result["retry_prompt"] = retry_prompt
