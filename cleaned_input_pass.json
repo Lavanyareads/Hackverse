@@ -1,0 +1,31 @@
+{
+  "original_prompt": "Summarize the quarterly revenue report.",
+  "document_text": "Q1 Revenue Report: Total revenue was $1.2M, up 8% from Q4. Total expenses were $700K. Net profit was $500K with a 41.7% margin. Top product category: Electronics, contributing 45% of total sales.",
+  "requirements": {
+    "task": "general",
+    "output_format": "text",
+    "tone": "default"
+  },
+  "metadata": {
+    "file_count": 1,
+    "total_characters": 210,
+    "total_file_size_mb": 0.02,
+    "max_allowed_size_mb": 200,
+    "pages": 1,
+    "tables": 0,
+    "document_elements": 5,
+    "documents": [
+      {
+        "filename": "Q1_Revenue_Report.pdf",
+        "file_type": "pdf",
+        "file_size_mb": 0.02,
+        "pages": 1,
+        "tables": 0,
+        "document_elements": 5,
+        "status": "processed"
+      }
+    ],
+    "warnings": [],
+    "processing_status": "complete"
+  }
+}

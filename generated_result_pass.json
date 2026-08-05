@@ -1,0 +1,11 @@
+{
+  "optimized_prompt": "Summarize the quarterly revenue report, covering total revenue, expenses, net profit, and the top-performing product category.",
+  "selected_model": "granite3.1-moe:3b",
+  "task_style": "balanced",
+  "temperature_used": 0.5,
+  "generated_output": {
+    "type": "text",
+    "files": [],
+    "text": "Q1 Revenue Summary\n\nTotal revenue for Q1 was $1.2M, an 8% increase from Q4. Total expenses came in at $700K, resulting in a net profit of $500K and a healthy 41.7% margin. Electronics was the top-performing product category, contributing 45% of total sales."
+  }
+}

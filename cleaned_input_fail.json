@@ -1,0 +1,31 @@
+{
+  "original_prompt": "Summarize the marketing campaign performance report.",
+  "document_text": "Marketing Campaign Report: The Q2 email campaign achieved a 22% open rate and a 3.5% click-through rate, generating 450 leads. Total campaign spend was $15,000, resulting in a cost-per-lead of $33.33.",
+  "requirements": {
+    "task": "general",
+    "output_format": "text",
+    "tone": "default"
+  },
+  "metadata": {
+    "file_count": 1,
+    "total_characters": 205,
+    "total_file_size_mb": 0.03,
+    "max_allowed_size_mb": 200,
+    "pages": 1,
+    "tables": 0,
+    "document_elements": 4,
+    "documents": [
+      {
+        "filename": "Marketing_Campaign_Report.pdf",
+        "file_type": "pdf",
+        "file_size_mb": 0.03,
+        "pages": 1,
+        "tables": 0,
+        "document_elements": 4,
+        "status": "processed"
+      }
+    ],
+    "warnings": [],
+    "processing_status": "complete"
+  }
+}

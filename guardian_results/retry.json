@@ -1,0 +1,9 @@
+{
+  "retry_prompt": "**Sales Report Generation Request**\n\nYou are provided with a large text containing repeated segments labeled `sales_data_sample`. Your task is to create a comprehensive sales report based on this data. The report should include:\n\n1. **Data Extraction**: Extract all unique entries from the `sales_data_sample` sections, removing any duplicated labels or extraneous text.\n2. **Category Analysis**: Categorize each extracted entry into predefined size categories such as Small, Medium, and Large.\n3. **Frequency Summary**: Calculate the frequency of each category (Small, Medium, Large) across all extracted entries.\n4. **Visualization Suggestion**: Recommend a simple visualization (e.g., bar chart or pie chart) to represent the distribution of sizes for quick insight.\n5. **Insight Section**: Provide brief insights derived from the frequency summary, such as which size is most common and any notable patterns.\n\n**Constraints:**\n- Ensure the report maintains clarity and precision.\n- Use clear headings for each section of the report.\n- The output should be concise yet informative, suitable for a business audience.\n\nPlease generate the sales report following the above guidelines.\n\nThe previous attempt had issues. Please fix the following and regenerate:\nOllama did not respond within 180 seconds. The model may still be loading, or the machine may be under heavy load. Output type was 'file' but no files were actually produced - regenerate and ensure a file is attached.",
+  "retry_temperature": 0.9,
+  "failed_checks": [
+    "guardian_unavailable",
+    "output_delivered"
+  ],
+  "feedback": "Ollama did not respond within 180 seconds. The model may still be loading, or the machine may be under heavy load. Output type was 'file' but no files were actually produced - regenerate and ensure a file is attached."
+}

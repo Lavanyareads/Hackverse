@@ -1,1 +1,0 @@
-{"timestamp": "2026-08-05T01:18:24", "mode": "files", "pass": false, "failed_checks": ["requirement_match", "completeness", "factual_accuracy", "output_delivered"], "guardian_output": ".\\guardian_output_20260805_011824.json", "retry_output": ".\\guardian_retry_20260805_011824.json"}

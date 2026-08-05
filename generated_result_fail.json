@@ -1,0 +1,11 @@
+{
+  "optimized_prompt": "Summarize the marketing campaign performance report, covering open rate, click-through rate, leads generated, spend, and cost-per-lead.",
+  "selected_model": "granite3.1-moe:3b",
+  "task_style": "balanced",
+  "temperature_used": 0.5,
+  "generated_output": {
+    "type": "text",
+    "files": [],
+    "text": "Marketing Campaign Summary\n\nThe Q2 email campaign achieved an impressive 45% open rate and an 8% click-through rate, generating 1,200 leads. Total spend was $15,000, giving a cost-per-lead of just $12.50."
+  }
+}
