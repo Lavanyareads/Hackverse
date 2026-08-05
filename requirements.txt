@@ -1,6 +1,12 @@
-requests>=2.31
-python-pptx>=1.0
-python-docx>=1.1
-pypdf>=5.0
-openpyxl>=3.1
-Pillow>=10.0
+# Core - talking to Ollama
+requests>=2.31.0
+
+# File extraction for guardian_check_from_orchestrator / extract_file_content
+python-pptx>=1.0.0    # .pptx
+python-docx>=1.1.0    # .docx
+pypdf>=4.0.0           # .pdf
+openpyxl>=3.1.0        # .xlsx / .xls
+Pillow>=10.0.0          # image validation (.png, .jpg, .jpeg, .gif, .bmp, .webp)
+
+# Note: .txt, .csv, and .md are read with Python's built-in open() - no
+# extra package needed for those.
